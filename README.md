@@ -8,7 +8,7 @@ Built as the companion environment for [Developer Network Segmentation Is Not th
 
 ## The Problem
 
-When a developer runs an AI tool — a coding assistant, an MCP server, a support chatbot — that tool inherits the developer's credentials. If the developer has access to payment records, so does the agent. Not because anyone decided the agent should have that access. Because nobody decided it shouldn't.
+When a developer runs an AI tool (a coding assistant, an MCP server, a support chatbot), that tool inherits the developer's credentials. If the developer has access to payment records, so does the agent. Not because anyone decided the agent should have that access. Because nobody decided it shouldn't.
 
 The standard answer is to instruct the agent not to access sensitive data. That is not a security control. An instruction can be overridden by a prompt. A Cedar policy evaluated by Amazon Verified Permissions cannot.
 
@@ -24,7 +24,7 @@ Three principals. One data platform. Clearly different access. All enforced at t
 | **Developer (standard)** | Read all | **Deny** | Read |
 | **Developer (elevated)** | Read / write all | Read (JIT) | Read |
 
-The chatbot and the developer share the same environment. The developer may have elevated access to payment records. The agent does not — because its Cedar identity has no permit for payments, not because it was told to refuse.
+The chatbot and the developer share the same environment. The developer may have elevated access to payment records. The agent does not, because its Cedar identity has no permit for payments, not because it was told to refuse.
 
 ---
 
@@ -32,13 +32,13 @@ The chatbot and the developer share the same environment. The developer may have
 
 ### 1. Same table, different rows
 
-The chatbot and a developer both query the `orders` table. The developer sees all orders. The chatbot sees only the orders belonging to the current customer session. The Cedar policy passes `session_customer_id` as a context attribute and the app enforces the row-level filter. Same table, same query, different scope — enforced at the identity layer.
+The chatbot and a developer both query the `orders` table. The developer sees all orders. The chatbot sees only the orders belonging to the current customer session. The Cedar policy passes `session_customer_id` as a context attribute and the app enforces the row-level filter. Same table, same query, different scope. Enforced at the identity layer.
 
 ### 2. Developer asks the agent to pull payment data
 
 A developer is debugging a payment issue. They ask the chatbot: *"Can you pull the payment details for order 3?"*
 
-The chatbot calls `IsAuthorized` for `read` on `payments`. AVP returns `DENY`. No query runs. The denial is logged in CloudWatch with the principal, action, resource, and timestamp. The developer's own elevated session is irrelevant — the agent's Cedar identity has no permit for payments, and a separate `forbid` ceiling policy means no developer can configure any agent with payment access regardless of what they put in their code.
+The chatbot calls `IsAuthorized` for `read` on `payments`. AVP returns `DENY`. No query runs. The denial is logged in CloudWatch with the principal, action, resource, and timestamp. The developer's own elevated session is irrelevant. The agent's Cedar identity has no permit for payments, and a separate `forbid` ceiling policy means no developer can configure any agent with payment access regardless of what they put in their code.
 
 ### 3. Developer queries payments directly
 
@@ -103,7 +103,7 @@ A developer cannot grant any agent access to payments by changing application co
 
 ## Prerequisites
 
-Three external accounts are required. This is intentional — the setup demonstrates the credential separation the architecture depends on.
+Three external accounts are required. This is intentional: the setup demonstrates the credential separation the architecture depends on.
 
 | Service | Purpose | Pricing |
 |---|---|---|
@@ -129,7 +129,7 @@ terraform init
 terraform apply
 ```
 
-Terraform outputs the `policy_store_id`. Copy it — you need it in step 3.
+Terraform outputs the `policy_store_id`. Copy it. You need it in step 3.
 
 ```
 Outputs:
@@ -153,12 +153,12 @@ In the [Bitwarden Secrets Manager console](https://vault.bitwarden.com):
 
 **Create two machine accounts:**
 
-1. `chatbot-support` — read access to the `avp-agent-identity` project. Copy the access token.
-2. `developer-portal` — read access to the `avp-agent-identity` project. Copy the access token.
+1. `chatbot-support`: read access to the `avp-agent-identity` project. Copy the access token.
+2. `developer-portal`: read access to the `avp-agent-identity` project. Copy the access token.
 
 **Why two machine accounts?**
 
-The chatbot agent and the developer portal are separate principals with separate credentials. Neither can use the other's token. Your personal developer BWS token lives in your shell profile (`~/.zshrc`), not here. An agent running at project scope cannot see user-level environment variables — this is the credential scoping pattern the architecture demonstrates.
+The chatbot agent and the developer portal are separate principals with separate credentials. Neither can use the other's token. Your personal developer BWS token lives in your shell profile (`~/.zshrc`), not here. An agent running at project scope cannot see user-level environment variables. This is the credential scoping pattern the architecture demonstrates.
 
 ### 3. Configure environment variables
 
@@ -201,7 +201,7 @@ Run these in order. Each one isolates a specific claim.
 
 ---
 
-### Moment 1 — Same table, different scope
+### Moment 1: Same table, different scope
 
 **Customer view (chatbot):**
 
@@ -221,7 +221,7 @@ AVP evaluates the `developer` principal. All five orders across three customers 
 
 ---
 
-### Moment 2 — Developer asks the agent to pull payment data
+### Moment 2: Developer asks the agent to pull payment data
 
 Open http://localhost:8000 and send:
 
@@ -229,11 +229,11 @@ Open http://localhost:8000 and send:
 
 The agent calls `get_payment_details`. The handler calls `IsAuthorized` for `read` on `payments`. AVP evaluates the Cedar policy for `chatbot-support`. Two policies apply: an explicit `forbid` on payments for the chatbot, and a ceiling `forbid` on all agent principals. The decision is `DENY`. No query runs.
 
-The agent responds that it cannot access payment records. Not because it was told to refuse — because the data is unreachable at the authorization layer. The denial is in CloudWatch.
+The agent responds that it cannot access payment records. Not because it was told to refuse. Because the data is unreachable at the authorization layer. The denial is in CloudWatch.
 
 ---
 
-### Moment 3 — Developer queries payments directly (without elevation)
+### Moment 3: Developer queries payments directly (without elevation)
 
 ```bash
 curl http://localhost:8001/payments
@@ -251,7 +251,7 @@ The developer principal has no standard-access permit for payments.
 
 ---
 
-### Moment 4 — Developer elevates and queries payments
+### Moment 4: Developer elevates and queries payments
 
 ```bash
 curl http://localhost:8001/payments -H "X-Elevated: true"
@@ -267,7 +267,7 @@ The chatbot still cannot. The developer's elevation was a separate AVP context e
 
 ---
 
-### Moment 5 — The permission ceiling
+### Moment 5: The permission ceiling
 
 The Terraform config includes a `forbid` policy applied to all agent principals:
 
