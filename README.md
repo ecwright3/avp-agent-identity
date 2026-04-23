@@ -147,6 +147,8 @@ In the [Bitwarden Secrets Manager console](https://vault.bitwarden.com):
 | Key | Value |
 |---|---|
 | `ANTHROPIC_API_KEY` | Your Anthropic API key |
+| `AWS_ACCESS_KEY_ID` | IAM user key with `verifiedpermissions:IsAuthorized` |
+| `AWS_SECRET_ACCESS_KEY` | IAM user secret key |
 | `DB_ORDERS_PASSWORD` | A strong random password you choose |
 | `DB_PAYMENTS_PASSWORD` | A strong random password you choose |
 | `DB_LOGS_PASSWORD` | A strong random password you choose |
@@ -176,13 +178,11 @@ DEVELOPER_BWS_TOKEN=    # developer-portal machine account token (UUID from BWS)
 BWS_ORGANIZATION_ID=    # from Bitwarden Settings > Organization ID (UUID)
 AVP_POLICY_STORE_ID=    # output from terraform apply
 AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=      # IAM user with verifiedpermissions:IsAuthorized
-AWS_SECRET_ACCESS_KEY=  # IAM user secret key
 ```
 
-DB passwords are not in `.env`. They are injected at startup by `bws run` in the next step.
+This file contains no secrets. DB passwords, AWS credentials, and the Anthropic API key all live in BWS and are injected at startup by `bws run` in the next step.
 
-> **AWS credentials:** In production these would also live in BWS. For this demo they stay here alongside the other infrastructure config. Do not commit `.env` to version control.
+> **Token clarity:** `CHATBOT_BWS_TOKEN` and `DEVELOPER_BWS_TOKEN` are machine account tokens for the services running inside Docker. Your personal `BWS_ACCESS_TOKEN` is a separate credential used on the host to run `bws run`. It belongs in `~/.zshrc`, not here. Do not commit `.env` to version control.
 
 ### 4. Start the stack
 

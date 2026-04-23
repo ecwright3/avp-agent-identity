@@ -6,10 +6,13 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # Machine account token: scoped identity for this service only
       - BWS_ACCESS_TOKEN=${CHATBOT_BWS_TOKEN}
       - BWS_ORGANIZATION_ID=${BWS_ORGANIZATION_ID}
+      # Structural config
       - AVP_POLICY_STORE_ID=${AVP_POLICY_STORE_ID}
       - AWS_REGION=${AWS_REGION}
+      # AWS credentials injected by `bws run` on the host — not in .env
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
     depends_on:
