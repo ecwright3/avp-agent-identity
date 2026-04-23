@@ -185,6 +185,22 @@ DB_LOGS_PASSWORD=         # choose a strong password, then store this same value
 >
 > **AWS credentials:** In production these would also live in BWS. For this demo they stay as environment variables alongside the other infrastructure config. Do not commit `.env` to version control.
 
+#### After initial setup: replace DB passwords with BWS secret UUIDs
+
+The DB passwords only need to be in `.env` for the first `docker compose up`, when Postgres initializes and sets the passwords on the containers. Once that is done, Docker Compose does not re-initialize as long as the data volumes exist.
+
+After the containers are running, you can replace the three password values in `.env` with the corresponding BWS secret UUIDs:
+
+```env
+DB_ORDERS_PASSWORD=<BWS secret UUID for DB_ORDERS_PASSWORD>
+DB_PAYMENTS_PASSWORD=<BWS secret UUID for DB_PAYMENTS_PASSWORD>
+DB_LOGS_PASSWORD=<BWS secret UUID for DB_LOGS_PASSWORD>
+```
+
+The app services resolve the passwords from BWS at startup regardless. The UUID entries serve as a pointer to where the real values live, and the actual passwords are no longer sitting in a local file.
+
+**One caveat:** if you run `docker compose down -v` the data volumes are destroyed and Postgres re-initializes on the next start. At that point the real password values need to be back in `.env` for the initialization to succeed. Fetch them from BWS, run `docker compose up --build`, then replace with UUIDs again.
+
 ### 4. Start the stack
 
 ```bash
