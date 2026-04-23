@@ -169,19 +169,21 @@ cp .env.example .env
 Fill in all values:
 
 ```env
-CHATBOT_BWS_TOKEN=        # chatbot-support machine account token
-DEVELOPER_BWS_TOKEN=      # developer-portal machine account token
-BWS_ORGANIZATION_ID=      # from Bitwarden Settings > Organization ID
+CHATBOT_BWS_TOKEN=        # chatbot-support machine account token (UUID from BWS)
+DEVELOPER_BWS_TOKEN=      # developer-portal machine account token (UUID from BWS)
+BWS_ORGANIZATION_ID=      # from Bitwarden Settings > Organization ID (UUID)
 AVP_POLICY_STORE_ID=      # output from terraform apply
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=        # IAM user with verifiedpermissions:IsAuthorized
-AWS_SECRET_ACCESS_KEY=
-DB_ORDERS_PASSWORD=       # must match the value stored in BWS
-DB_PAYMENTS_PASSWORD=     # must match the value stored in BWS
-DB_LOGS_PASSWORD=         # must match the value stored in BWS
+AWS_SECRET_ACCESS_KEY=    # IAM user secret key
+DB_ORDERS_PASSWORD=       # choose a strong password, then store this same value in BWS under DB_ORDERS_PASSWORD
+DB_PAYMENTS_PASSWORD=     # choose a strong password, then store this same value in BWS under DB_PAYMENTS_PASSWORD
+DB_LOGS_PASSWORD=         # choose a strong password, then store this same value in BWS under DB_LOGS_PASSWORD
 ```
 
-> The DB passwords serve two purposes: Docker Compose uses them to initialize the Postgres containers, and the app services fetch them from BWS at startup. The values must match.
+> **DB passwords:** You are setting these passwords, not copying them from somewhere. Choose strong random values, put them here so Docker Compose can initialize the Postgres containers, and store the same values in BWS under the matching key names. The app services fetch them from BWS at runtime. The values must be identical in both places.
+>
+> **AWS credentials:** In production these would also live in BWS. For this demo they stay as environment variables alongside the other infrastructure config. Do not commit `.env` to version control.
 
 ### 4. Start the stack
 
