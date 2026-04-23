@@ -37,7 +37,7 @@ services:
       - app-net
 
   # Orders — chatbot (own customer only) and developer (all) can read
-  # Postgres password must match DB_ORDERS_PASSWORD stored in BWS
+  # POSTGRES_PASSWORD is injected by `bws run` at startup. Not in .env.
   db-orders:
     image: postgres:16
     environment:

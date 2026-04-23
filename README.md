@@ -147,9 +147,11 @@ In the [Bitwarden Secrets Manager console](https://vault.bitwarden.com):
 | Key | Value |
 |---|---|
 | `ANTHROPIC_API_KEY` | Your Anthropic API key |
-| `DB_ORDERS_PASSWORD` | A strong random password |
-| `DB_PAYMENTS_PASSWORD` | A strong random password |
-| `DB_LOGS_PASSWORD` | A strong random password |
+| `DB_ORDERS_PASSWORD` | A strong random password you choose |
+| `DB_PAYMENTS_PASSWORD` | A strong random password you choose |
+| `DB_LOGS_PASSWORD` | A strong random password you choose |
+
+These are the only place these values will live. They are never written to a file on disk.
 
 **Create two machine accounts:**
 
@@ -169,43 +171,31 @@ cp .env.example .env
 Fill in all values:
 
 ```env
-CHATBOT_BWS_TOKEN=        # chatbot-support machine account token (UUID from BWS)
-DEVELOPER_BWS_TOKEN=      # developer-portal machine account token (UUID from BWS)
-BWS_ORGANIZATION_ID=      # from Bitwarden Settings > Organization ID (UUID)
-AVP_POLICY_STORE_ID=      # output from terraform apply
+CHATBOT_BWS_TOKEN=      # chatbot-support machine account token (UUID from BWS)
+DEVELOPER_BWS_TOKEN=    # developer-portal machine account token (UUID from BWS)
+BWS_ORGANIZATION_ID=    # from Bitwarden Settings > Organization ID (UUID)
+AVP_POLICY_STORE_ID=    # output from terraform apply
 AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=        # IAM user with verifiedpermissions:IsAuthorized
-AWS_SECRET_ACCESS_KEY=    # IAM user secret key
-DB_ORDERS_PASSWORD=       # choose a strong password, then store this same value in BWS under DB_ORDERS_PASSWORD
-DB_PAYMENTS_PASSWORD=     # choose a strong password, then store this same value in BWS under DB_PAYMENTS_PASSWORD
-DB_LOGS_PASSWORD=         # choose a strong password, then store this same value in BWS under DB_LOGS_PASSWORD
+AWS_ACCESS_KEY_ID=      # IAM user with verifiedpermissions:IsAuthorized
+AWS_SECRET_ACCESS_KEY=  # IAM user secret key
 ```
 
-> **DB passwords:** You are setting these passwords, not copying them from somewhere. Choose strong random values, put them here so Docker Compose can initialize the Postgres containers, and store the same values in BWS under the matching key names. The app services fetch them from BWS at runtime. The values must be identical in both places.
->
-> **AWS credentials:** In production these would also live in BWS. For this demo they stay as environment variables alongside the other infrastructure config. Do not commit `.env` to version control.
+DB passwords are not in `.env`. They are injected at startup by `bws run` in the next step.
 
-#### After initial setup: replace DB passwords with BWS secret UUIDs
-
-The DB passwords only need to be in `.env` for the first `docker compose up`, when Postgres initializes and sets the passwords on the containers. Once that is done, Docker Compose does not re-initialize as long as the data volumes exist.
-
-After the containers are running, you can replace the three password values in `.env` with the corresponding BWS secret UUIDs:
-
-```env
-DB_ORDERS_PASSWORD=<BWS secret UUID for DB_ORDERS_PASSWORD>
-DB_PAYMENTS_PASSWORD=<BWS secret UUID for DB_PAYMENTS_PASSWORD>
-DB_LOGS_PASSWORD=<BWS secret UUID for DB_LOGS_PASSWORD>
-```
-
-The app services resolve the passwords from BWS at startup regardless. The UUID entries serve as a pointer to where the real values live, and the actual passwords are no longer sitting in a local file.
-
-**One caveat:** if you run `docker compose down -v` the data volumes are destroyed and Postgres re-initializes on the next start. At that point the real password values need to be back in `.env` for the initialization to succeed. Fetch them from BWS, run `docker compose up --build`, then replace with UUIDs again.
+> **AWS credentials:** In production these would also live in BWS. For this demo they stay here alongside the other infrastructure config. Do not commit `.env` to version control.
 
 ### 4. Start the stack
 
+`bws run` wraps `docker compose up` and injects all BWS secrets as environment variables into the process. Docker Compose passes them into the containers. The passwords are never written to disk.
+
 ```bash
-docker compose up --build
+export BWS_ACCESS_TOKEN=<your-personal-bws-token>
+bws run --project-id <avp-agent-identity-project-uuid> -- 'docker compose up --build'
 ```
+
+> **Note on `BWS_ACCESS_TOKEN`:** This is your personal developer token, set in your shell session. It is separate from the machine account tokens used by the chatbot and developer portal services. Set it as a user-level env var in `~/.zshrc` rather than in `.env`.
+
+> **`docker inspect` caveat:** Any env var injected into a container is visible via `docker inspect <container>` to anyone with Docker socket access. The passwords are not on disk, but they are visible in the container environment. This is a known limitation of the env var injection model.
 
 - Chatbot UI: http://localhost:8000
 - Developer portal: http://localhost:8001
@@ -353,7 +343,7 @@ avp-agent-identity/
 ## Teardown
 
 ```bash
-docker compose down -v
+bws run --project-id <avp-agent-identity-project-uuid> -- 'docker compose down -v'
 cd terraform && terraform destroy
 ```
 
