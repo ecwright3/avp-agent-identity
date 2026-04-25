@@ -26,7 +26,7 @@ import boto3
 import psycopg2
 import chainlit as cl
 from anthropic import Anthropic
-from secrets import load_secrets
+from bws_secrets import load_secrets
 
 # ---------------------------------------------------------------------------
 # Secrets from BWS — fetched at startup using the machine account token

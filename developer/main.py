@@ -27,7 +27,7 @@ import os
 import boto3
 import psycopg2
 from fastapi import FastAPI, HTTPException, Header
-from secrets import load_secrets
+from bws_secrets import load_secrets
 
 _secrets = load_secrets()
 
