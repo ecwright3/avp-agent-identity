@@ -170,7 +170,7 @@ These are the only place these values will live. They are never written to a fil
 
 **Create a personal access token:**
 
-In the Secrets Manager console, click your avatar in the top-right corner and select **User API key**. Generate a token and add it to your shell profile:
+Go to `vault.bitwarden.com/#/settings/security/security-keys`, scroll down to the **API Key** section, and click **View API key**. Add the token to your shell profile:
 
 ```bash
 # ~/.zshrc
