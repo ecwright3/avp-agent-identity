@@ -160,6 +160,17 @@ These are the only place these values will live. They are never written to a fil
 1. `chatbot-support`: read access to the `avp-agent-identity` project. Copy the access token.
 2. `developer-portal`: read access to the `avp-agent-identity` project. Copy the access token.
 
+**Create a personal access token:**
+
+In the Secrets Manager console, click your avatar in the top-right corner and select **User API key**. Generate a token and add it to your shell profile:
+
+```bash
+# ~/.zshrc
+export BWS_ACCESS_TOKEN=<your-personal-token>
+```
+
+This is your developer identity on the host machine. It is used to run `bws run` in Step 4 and is intentionally separate from the machine account tokens above.
+
 **Why two machine accounts?**
 
 The chatbot agent and the developer portal are separate principals with separate credentials. Neither can use the other's token. Your personal developer BWS token lives in your shell profile (`~/.zshrc`), not here. An agent running at project scope cannot see user-level environment variables. This is the credential scoping pattern the architecture demonstrates.
