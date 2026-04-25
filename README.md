@@ -168,16 +168,16 @@ These are the only place these values will live. They are never written to a fil
 1. `chatbot-support`: read access to the `avp-agent-identity` project. Copy the access token.
 2. `developer-portal`: read access to the `avp-agent-identity` project. Copy the access token.
 
-**Create a personal access token:**
+**Set your host token:**
 
-Go to `vault.bitwarden.com/#/settings/security/security-keys`, scroll down to the **API Key** section, and click **View API key**. Add the token to your shell profile:
+The `developer-portal` token doubles as your host credential. Add it to your shell profile:
 
 ```bash
 # ~/.zshrc
-export BWS_ACCESS_TOKEN=<your-personal-token>
+export BWS_ACCESS_TOKEN=<developer-portal-token>
 ```
 
-This is your developer identity on the host machine. It is used to run `bws run` in Step 4 and is intentionally separate from the machine account tokens above.
+This keeps the developer token at user-level scope, invisible to the chatbot agent running inside Docker. That separation is the scoping pattern this architecture demonstrates.
 
 **Why two machine accounts?**
 
