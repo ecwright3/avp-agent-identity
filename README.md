@@ -8,7 +8,7 @@ Built as the companion environment for [Developer Network Segmentation Is Not th
 
 ## The Problem
 
-When a developer runs an AI tool (a coding assistant, an MCP server, a support chatbot), that tool inherits the developer's credentials. If the developer has access to payment records, so does the agent. Not because anyone decided the agent should have that access. Because nobody decided it shouldn't.
+When a security engineer runs an AI tool on their workstation, that tool inherits the engineer's credentials. If the engineer has access to sensitive incident data, so does the agent. Not because anyone decided the agent should have that access. Because nobody decided it shouldn't.
 
 The standard answer is to instruct the agent not to access sensitive data. That is not a security control. An instruction can be overridden by a prompt. A Cedar policy evaluated by Amazon Verified Permissions cannot.
 
@@ -16,87 +16,157 @@ The standard answer is to instruct the agent not to access sensitive data. That 
 
 ## What This Demonstrates
 
-Three principals. One data platform. Clearly different access. All enforced at the authorization layer, not the application layer.
+Two principals. One incidents table. Different field-level access. All enforced at the authorization layer, not the application layer.
 
-| Principal | Orders | Payments | System Logs |
-|---|---|---|---|
-| **Chatbot agent** | Read (own customer only) | **Deny (AVP ceiling)** | **Deny** |
-| **Developer (standard)** | Read all | **Deny** | Read |
-| **Developer (elevated)** | Read / write all | Read (JIT) | Read |
+| Principal | Incident title, severity, status | Affected customers, internal notes, remediation details |
+|---|---|---|
+| **KB agent** | Read | **Deny (AVP ceiling)** |
+| **Security engineer (standard)** | Read | **Deny** |
+| **Security engineer (elevated)** | Read | Read (JIT) |
 
-The chatbot and the developer share the same environment. The developer may have elevated access to payment records. The agent does not, because its Cedar identity has no permit for payments, not because it was told to refuse.
+The KB agent and the security engineer run as sibling processes inside the same container, on the same OS. The engineer may elevate to access sensitive incident fields. The agent cannot, because its Cedar identity has no permit for sensitive fields — and a ceiling `forbid` policy means no developer can configure any agent to exceed that limit, regardless of what they put in code or environment variables.
 
 ---
 
-## The Four Demo Moments
+## The Core Claim
 
-### 1. Same table, different rows
+**Same table. Same OS. Different scope. Enforced at the authorization layer.**
 
-The chatbot and a developer both query the `orders` table. The developer sees all orders. The chatbot sees only the orders belonging to the current customer session. The Cedar policy passes `session_customer_id` as a context attribute and the app enforces the row-level filter. Same table, same query, different scope. Enforced at the identity layer.
-
-### 2. Developer asks the agent to pull payment data
-
-A developer is debugging a payment issue. They ask the chatbot: *"Can you pull the payment details for order 3?"*
-
-The chatbot calls `IsAuthorized` for `read` on `payments`. AVP returns `DENY`. No query runs. The denial is logged in CloudWatch with the principal, action, resource, and timestamp. The developer's own elevated session is irrelevant. The agent's Cedar identity has no permit for payments, and a separate `forbid` ceiling policy means no developer can configure any agent with payment access regardless of what they put in their code.
-
-### 3. Developer queries payments directly
-
-The developer calls the developer portal with `X-Elevated: true`. AVP evaluates the Cedar policy, confirms elevation context is active, and returns `ALLOW`. The payment record for order 3 is returned.
-
-The chatbot is still running. Its scope did not change.
-
-### 4. The permission ceiling
-
-The Terraform config includes a `forbid` policy that applies to all agent principals:
-
-```cedar
-forbid(
-  principal in AgentIdentity::Agent::"*",
-  action in [AgentIdentity::Action::"read", AgentIdentity::Action::"write"],
-  resource == AgentIdentity::DataStore::"payments"
-);
-```
-
-A developer cannot grant any agent access to payments by changing application code or environment variables. The ceiling is defined in the policy store. SecOps owns it.
+The KB agent queries the same `incidents` table the engineer uses. AVP evaluates every request against Cedar policies before any data is returned. The agent gets public fields. The engineer gets public fields by default, and sensitive fields when elevated. The separation is not a prompt, a system instruction, or a network rule. It is a Cedar policy.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                      Docker Compose                           │
-│                                                               │
-│  ┌──────────────────┐      ┌──────────────────────────────┐  │
-│  │  Chainlit        │      │  FastAPI                     │  │
-│  │  Chatbot         │      │  Developer Portal            │  │
-│  │  port 8000       │      │  port 8001                   │  │
-│  │                  │      │                              │  │
-│  │  Principal:      │      │  Principal: developer        │  │
-│  │  chatbot-support │      │  (standard or elevated       │  │
-│  │                  │      │   via X-Elevated header)     │  │
-│  └────────┬─────────┘      └──────────────┬───────────────┘  │
-│           │                               │                   │
-│           └───────────────┬───────────────┘                   │
-│                           │ IsAuthorized() on every access    │
-│                           ▼                                   │
-│                 ┌──────────────────┐                          │
-│                 │  AVP  (AWS)      │ ← Cedar policies         │
-│                 │  IsAuthorized    │                          │
-│                 └────────┬─────────┘                          │
-│                          │ ALLOW / DENY + CloudWatch log      │
-│            ┌─────────────┼──────────────┐                     │
-│            ▼             ▼              ▼                     │
-│     ┌────────────┐ ┌──────────┐ ┌───────────┐                │
-│     │  orders    │ │ payments │ │  system   │                │
-│     │  Postgres  │ │ Postgres │ │  logs     │                │
-│     └────────────┘ └──────────┘ └───────────┘                │
-│                                                               │
-│  Credential delivery: Bitwarden Secrets Manager              │
-│  chatbot token → .env.local (project scope)                  │
-│  developer token → user-level env (not visible to agent)     │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  workspace container — simulates a shared developer workstation      │
+│                                                                       │
+│  ┌─────────────────────────┐   ┌─────────────────────────────────┐  │
+│  │  KB Agent               │   │  Security Engineer Portal       │  │
+│  │  Chainlit  port 8000    │   │  FastAPI   port 8001            │  │
+│  │  Debug API port 8002    │   │                                 │  │
+│  │                         │   │                                 │  │
+│  │  Principal: kb-agent    │   │  Principal: security-engineer   │  │
+│  │  BWS token: KB_BWS_TOKEN│   │  BWS token: SECURITY_ENGINEER   │  │
+│  │  (engineer token        │   │            _BWS_TOKEN           │  │
+│  │   stripped at launch)   │   │  (inherited from container env) │  │
+│  └───────────┬─────────────┘   └──────────────┬──────────────────┘  │
+│              │                                 │                      │
+│              └─────────────────┬───────────────┘                      │
+│                                │ IsAuthorized() before every access   │
+│                                ▼                                      │
+│                      ┌──────────────────┐                            │
+│                      │  AVP  (AWS)      │ ← Cedar policies           │
+│                      │  IsAuthorized    │                            │
+│                      └────────┬─────────┘                            │
+│                               │ ALLOW / DENY + CloudWatch log        │
+│                               ▼                                      │
+│                      ┌──────────────────┐                            │
+│                      │  incidents       │                            │
+│                      │  Postgres        │                            │
+│                      │                  │                            │
+│                      │  public fields:  │                            │
+│                      │  id, title,      │                            │
+│                      │  severity,       │                            │
+│                      │  status,         │                            │
+│                      │  created_at      │                            │
+│                      │                  │                            │
+│                      │  sensitive:      │                            │
+│                      │  affected_       │                            │
+│                      │  customers,      │                            │
+│                      │  internal_notes, │                            │
+│                      │  remediation_    │                            │
+│                      │  details,        │                            │
+│                      │  postmortem_url  │                            │
+│                      └──────────────────┘                            │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### How credential isolation works inside the container
+
+The container environment holds both machine account tokens. The entrypoint script (`workspace/entrypoint.sh`) manages which token each process sees:
+
+```
+Container environment:
+  KB_BWS_TOKEN=<kb-agent machine account token>
+  SECURITY_ENGINEER_BWS_TOKEN=<engineer machine account token>
+
+KB agent process launch:
+  env -u SECURITY_ENGINEER_BWS_TOKEN \
+      BWS_ACCESS_TOKEN="$KB_BWS_TOKEN" \
+      chainlit run kb_agent/app.py ...
+
+Engineer portal process launch:
+  BWS_ACCESS_TOKEN="$SECURITY_ENGINEER_BWS_TOKEN" \
+      uvicorn engineer.main:app ...
+```
+
+The KB agent process cannot see `SECURITY_ENGINEER_BWS_TOKEN`. Both processes share the same OS. The isolation is per-process, not per-container.
+
+### How AVP enforces field-level access
+
+AVP does not enforce column-level access natively. The pattern used here models the two access levels as separate resources:
+
+- `incidents`: public fields (title, severity, status, created_at)
+- `incidents_sensitive`: full record including all sensitive fields
+
+The application calls `IsAuthorized` with the appropriate resource before querying the database. Cedar evaluates the policy and returns ALLOW or DENY. The application applies the column filter based on the decision.
+
+```
+KB agent request flow:
+  IsAuthorized(principal=kb-agent, action=read, resource=incidents) → ALLOW
+  SELECT id, title, severity, status, created_at FROM incidents
+
+KB agent attempt on sensitive fields:
+  IsAuthorized(principal=kb-agent, action=read, resource=incidents_sensitive) → DENY
+  No query runs. Denial logged to CloudWatch.
+
+Engineer (elevated) request flow:
+  IsAuthorized(principal=security-engineer, action=read, resource=incidents_sensitive,
+               context={elevation_active: true}) → ALLOW
+  SELECT * FROM incidents
+```
+
+### Cedar policies
+
+```cedar
+// KB agent: permitted to read public fields
+permit(
+  principal == AgentIdentity::Agent::"kb-agent",
+  action == AgentIdentity::Action::"read",
+  resource == AgentIdentity::DataStore::"incidents"
+);
+
+// KB agent: explicitly forbidden from sensitive fields
+forbid(
+  principal == AgentIdentity::Agent::"kb-agent",
+  action == AgentIdentity::Action::"read",
+  resource == AgentIdentity::DataStore::"incidents_sensitive"
+);
+
+// Permission ceiling: no agent principal can ever reach sensitive fields.
+// A permit policy added for any agent is always overridden by this forbid.
+forbid(
+  principal is AgentIdentity::Agent,
+  action == AgentIdentity::Action::"read",
+  resource == AgentIdentity::DataStore::"incidents_sensitive"
+);
+
+// Security engineer (standard): public fields only
+permit(
+  principal == AgentIdentity::User::"security-engineer",
+  action == AgentIdentity::Action::"read",
+  resource == AgentIdentity::DataStore::"incidents"
+);
+
+// Security engineer (elevated): full record, JIT only
+permit(
+  principal == AgentIdentity::User::"security-engineer",
+  action == AgentIdentity::Action::"read",
+  resource == AgentIdentity::DataStore::"incidents_sensitive"
+)
+when { context.elevation_active == true };
 ```
 
 ---
@@ -129,7 +199,7 @@ terraform init
 terraform apply
 ```
 
-Terraform creates the policy store, an IAM user with least-privilege access, and an access key. Copy these outputs -- you will need them in step 2:
+Terraform creates the AVP policy store, all Cedar policies, an IAM user with least-privilege access, and an access key. Copy these outputs — you will need them in the next step:
 
 ```
 Outputs:
@@ -144,7 +214,7 @@ To retrieve the secret key:
 terraform output -raw aws_secret_access_key
 ```
 
-### 2. Create BWS machine accounts
+### 2. Configure Bitwarden Secrets Manager
 
 In the [Bitwarden Secrets Manager console](https://sm.bitwarden.com):
 
@@ -157,31 +227,16 @@ In the [Bitwarden Secrets Manager console](https://sm.bitwarden.com):
 | `ANTHROPIC_API_KEY` | Your Anthropic API key |
 | `AWS_ACCESS_KEY_ID` | from `terraform output aws_access_key_id` |
 | `AWS_SECRET_ACCESS_KEY` | from `terraform output -raw aws_secret_access_key` |
-| `DB_ORDERS_PASSWORD` | A strong random password you choose |
-| `DB_PAYMENTS_PASSWORD` | A strong random password you choose |
-| `DB_LOGS_PASSWORD` | A strong random password you choose |
+| `DB_INCIDENTS_PASSWORD` | A strong random password you choose |
 
-These are the only place these values will live. They are never written to a file on disk.
+These are the only place these values live. They are never written to a file on disk.
 
-**Create two machine accounts:**
+**Create two machine accounts**, both with read access to the `avp-agent-identity` project:
 
-1. `chatbot-support`: read access to the `avp-agent-identity` project. Copy the access token.
-2. `developer-portal`: read access to the `avp-agent-identity` project. Copy the access token.
+1. `kb-agent`: the identity the KB agent process uses. Copy the access token.
+2. `security-engineer`: the identity the engineer portal process uses. Copy the access token.
 
-**Set your host token:**
-
-The `developer-portal` token doubles as your host credential. Add it to your shell profile:
-
-```bash
-# ~/.zshrc
-export BWS_ACCESS_TOKEN=<developer-portal-token>
-```
-
-This keeps the developer token at user-level scope, invisible to the chatbot agent running inside Docker. That separation is the scoping pattern this architecture demonstrates.
-
-**Why two machine accounts?**
-
-The chatbot agent and the developer portal are separate principals with separate credentials. Neither can use the other's token. Your personal developer BWS token lives in your shell profile (`~/.zshrc`), not here. An agent running at project scope cannot see user-level environment variables. This is the credential scoping pattern the architecture demonstrates.
+These are separate principals with separate credentials. Neither can use the other's token.
 
 ### 3. Configure environment variables
 
@@ -192,179 +247,145 @@ cp .env.example .env
 Fill in all values:
 
 ```env
-CHATBOT_BWS_TOKEN=      # chatbot-support machine account token (UUID from BWS)
-DEVELOPER_BWS_TOKEN=    # developer-portal machine account token (UUID from BWS)
-BWS_ORGANIZATION_ID=    # see note below
-AVP_POLICY_STORE_ID=    # output from terraform apply
+KB_BWS_TOKEN=                  # kb-agent machine account token
+SECURITY_ENGINEER_BWS_TOKEN=   # security-engineer machine account token
+BWS_ORGANIZATION_ID=           # UUID from your BWS org URL
+AVP_POLICY_STORE_ID=           # from terraform output
 AWS_REGION=us-east-1
 ```
 
-This file contains no secrets. DB passwords, AWS credentials, and the Anthropic API key all live in BWS and are injected at startup by `bws run` in the next step.
+> **Finding your Organization ID:** Open the Bitwarden Secrets Manager or Admin Console. The UUID in the URL is your Organization ID.
 
-> **Finding your Organization ID:** Look at the URL when you are anywhere in your Bitwarden organization (Secrets Manager or Admin Console). The UUID in the URL is your Organization ID.
-
-> **Token clarity:** `CHATBOT_BWS_TOKEN` and `DEVELOPER_BWS_TOKEN` are machine account tokens for the services running inside Docker. Your personal `BWS_ACCESS_TOKEN` is a separate credential used on the host to run `bws run`. It belongs in `~/.zshrc`, not here. Do not commit `.env` to version control.
+> **No secrets in this file.** The DB password, AWS credentials, and Anthropic API key all live in BWS and are injected at startup. Do not commit `.env` to version control.
 
 ### 4. Start the stack
 
-Install the BWS CLI if you haven't already. Download the binary for your platform from the [BWS releases page](https://github.com/bitwarden/sdk-sm/releases/tag/bws-v2.0.0), then move it to a directory on your PATH:
+Install the BWS CLI if you haven't already. Download the binary for your platform from the [BWS releases page](https://github.com/bitwarden/sdk-sm/releases/tag/bws-v2.0.0) and move it to your PATH:
 
 ```bash
 mv bws /usr/local/bin/bws
 chmod +x /usr/local/bin/bws
 ```
 
-`bws run` wraps `docker compose up` and injects all BWS secrets as environment variables into the process. Docker Compose passes them into the containers. The passwords are never written to disk.
+`bws run` wraps `docker compose up` and injects all BWS secrets as environment variables at startup. The passwords are never written to disk.
 
 ```bash
-export BWS_ACCESS_TOKEN=<your-personal-bws-token>
-bws run --project-id <avp-agent-identity-project-uuid> -- 'docker compose up --build'
+bws run --access-token <your-personal-bws-token> --project-id <avp-agent-identity-project-uuid> -- 'docker compose up --build'
 ```
 
-> **Note on `BWS_ACCESS_TOKEN`:** This is your personal developer token, set in your shell session. It is separate from the machine account tokens used by the chatbot and developer portal services. Set it as a user-level env var in `~/.zshrc` rather than in `.env`.
+Services:
 
-> **`docker inspect` caveat:** Any env var injected into a container is visible via `docker inspect <container>` to anyone with Docker socket access. The passwords are not on disk, but they are visible in the container environment. This is a known limitation of the env var injection model.
-
-- Chatbot UI: http://localhost:8000
-- Developer portal: http://localhost:8001
-- Developer portal API docs: http://localhost:8001/docs
+- **KB agent UI:** http://localhost:8000
+- **Engineer portal + API docs:** http://localhost:8001/docs
+- **KB agent debug:** http://localhost:8002/debug/env-scope
 
 ---
 
 ## Demo Walkthrough
 
-Run these in order. Each one isolates a specific claim.
+Run these in order. Each moment isolates one claim.
 
 ---
 
-### Moment 1: Same table, different scope
-
-**Customer view (chatbot):**
+### Moment 1: KB agent reads public incident fields
 
 Open http://localhost:8000 and send:
 
-> "Show me my orders."
+> "Show me all open incidents."
 
-The chatbot calls `IsAuthorized` with `context.session_customer_id = "cust-001"`. Cedar permits the read. The SQL query filters to `WHERE customer_id = 'cust-001'`. Two orders are returned.
+The agent calls `IsAuthorized` for `read` on `incidents`. Cedar permits it. The agent returns titles, severities, and statuses — no sensitive fields.
 
-**Developer view (all orders):**
+Then ask:
+
+> "What are the affected customers for incident 1?"
+
+The agent calls `get_sensitive_details`. The handler calls `IsAuthorized` for `read` on `incidents_sensitive`. AVP returns `DENY`. No query runs. The agent explains that sensitive fields are not accessible to this tool.
+
+---
+
+### Moment 2: Engineer queries incidents without elevation
 
 ```bash
-curl http://localhost:8001/orders
+curl http://localhost:8001/incidents
 ```
 
-AVP evaluates the `developer` principal. All five orders across three customers are returned. Same `orders` table. Different Cedar identity. Different scope.
+The engineer portal calls `IsAuthorized` for `read` on `incidents` with `elevation_active: false`. Cedar permits it. The response contains the same public fields the KB agent sees: title, severity, status, created_at. No sensitive fields.
+
+Same table. Same data. Same view as the agent — because the standard engineer role has the same public-field permit the KB agent has.
 
 ---
 
-### Moment 2: Developer asks the agent to pull payment data
-
-Open http://localhost:8000 and send:
-
-> "Can you pull the payment details for order 3?"
-
-The agent calls `get_payment_details`. The handler calls `IsAuthorized` for `read` on `payments`. AVP evaluates the Cedar policy for `chatbot-support`. Two policies apply: an explicit `forbid` on payments for the chatbot, and a ceiling `forbid` on all agent principals. The decision is `DENY`. No query runs.
-
-The agent responds that it cannot access payment records. Not because it was told to refuse. Because the data is unreachable at the authorization layer. The denial is in CloudWatch.
-
----
-
-### Moment 3: Developer queries payments directly (without elevation)
+### Moment 3: Engineer elevates and gets the full record
 
 ```bash
-curl http://localhost:8001/payments
+curl http://localhost:8001/incidents -H "X-Elevated: true"
 ```
 
-Expected: `403 Forbidden`
+The portal calls `IsAuthorized` for `read` on `incidents_sensitive` with `elevation_active: true`. Cedar evaluates the JIT policy and returns `ALLOW`. The full incident record is returned: affected customers, internal notes, remediation details, postmortem URL.
 
-```json
-{
-  "detail": "AVP DENY: DENY. Payment records require JIT elevation. Pass X-Elevated: true."
-}
-```
+The KB agent is still running at http://localhost:8000. Go back and ask:
 
-The developer principal has no standard-access permit for payments.
+> "Now can you show me the affected customers for incident 1?"
+
+The agent still cannot. The engineer's elevation was a separate AVP context evaluation for a separate principal. The agent's Cedar policy did not change.
 
 ---
 
-### Moment 4: Developer elevates and queries payments
+### Moment 4: The permission ceiling
 
-```bash
-curl http://localhost:8001/payments -H "X-Elevated: true"
-```
-
-AVP evaluates the elevated Cedar policy: `permit` where `context.elevation_active == true`. The payment records are returned, including the card details and processor reference for order 3.
-
-The chatbot is still running at http://localhost:8000. Go back and ask:
-
-> "Now can you pull the payment details for order 3?"
-
-The chatbot still cannot. The developer's elevation was a separate AVP context evaluation for a separate principal. The agent's Cedar policy did not change.
-
----
-
-### Moment 5: The permission ceiling
-
-The Terraform config includes a `forbid` policy applied to all agent principals:
+The Terraform config includes a `forbid` policy that applies to all agent principals regardless of any other configuration:
 
 ```cedar
 forbid(
-  principal in AgentIdentity::Agent::"*",
-  action in [AgentIdentity::Action::"read", AgentIdentity::Action::"write"],
-  resource == AgentIdentity::DataStore::"payments"
+  principal is AgentIdentity::Agent,
+  action == AgentIdentity::Action::"read",
+  resource == AgentIdentity::DataStore::"incidents_sensitive"
 );
 ```
 
-To verify: add a new `permit` policy for any agent principal on payments in `terraform/main.tf` and run `terraform apply`. Then try to access payments as that agent. The `forbid` overrides the `permit`. Cedar's explicit deny always wins.
+To verify: add a `permit` policy for the `kb-agent` principal on `incidents_sensitive` in `terraform/main.tf` and run `terraform apply`. Then ask the KB agent for sensitive fields again. The `forbid` overrides the `permit`. Cedar's explicit deny always wins.
 
-This is the control plane. SecOps defines the ceiling. Developers cannot exceed it regardless of what they put in application code or environment variables.
+This is the control plane. The security team defines the ceiling. Developers cannot exceed it by changing application code, environment variables, or agent configuration.
 
 ---
 
-### Moment 6: Credential scope isolation
+### Moment 5: Credential scope isolation on a shared OS
 
-The chatbot agent's BWS machine account token lives in `.env` at project scope. Your personal developer BWS token (`BWS_ACCESS_TOKEN`) lives in `~/.zshrc` at user scope and is set in your shell session before you run `bws run`. It is never written to any file in this project.
+Both the KB agent and the engineer portal are running inside the same container — the same OS, the same filesystem, the same network. The credential separation is per-process, not per-container.
 
-Verify the separation is real:
+**Engineer portal** (inherits full container env, including `SECURITY_ENGINEER_BWS_TOKEN`):
 
 ```bash
-# Developer portal process — should NOT see your personal BWS token
 curl http://localhost:8001/debug/env-scope
 ```
 
 Expected:
 ```json
-{"BWS_ACCESS_TOKEN_visible": false, "note": "PASS: developer token is not visible to this process."}
+{
+  "process": "security-engineer-portal",
+  "SECURITY_ENGINEER_BWS_TOKEN_visible": true,
+  "note": "PASS: engineer token is visible to this process (expected)."
+}
 ```
+
+**KB agent process** (`SECURITY_ENGINEER_BWS_TOKEN` stripped at launch by entrypoint.sh):
 
 ```bash
-# Chatbot container — confirm the same from inside Docker
-docker exec avp-agent-identity-chatbot-1 env | grep BWS_ACCESS_TOKEN
+curl http://localhost:8002/debug/env-scope
 ```
 
-Expected: no output. The container has no visibility into your shell session.
-
-If either check fails, your personal token has leaked into the process environment. The most common cause: `BWS_ACCESS_TOKEN` was set in `.env` rather than only in your shell profile.
-
-**The honest residual:** this separation is enforced by discipline, not by tooling. Nothing prevents a developer from setting their personal token in `.env`. If they do, the credential isolation collapses silently. AVP still enforces authorization at the policy layer, but the scoping pattern is gone. This is a code review control, not a technical one.
-
----
-
-## Credential Scoping Pattern
-
-```
-Your shell session (~/.zshrc):
-  BWS_ACCESS_TOKEN=<your personal developer token>   ← developer scope
-
-Project directory (.env.local):
-  CHATBOT_BWS_TOKEN=<chatbot-support machine token>  ← agent scope
+Expected:
+```json
+{
+  "process": "kb-agent",
+  "SECURITY_ENGINEER_BWS_TOKEN_visible": false,
+  "note": "PASS: engineer token is not visible to the KB agent. Process-level credential isolation is working."
+}
 ```
 
-An agent process running at project scope sees `.env.local`. It does not inherit user-level shell environment variables. The developer's personal token is scoped to their shell session and is not visible to the agent.
+Same container. Different process environment. The isolation is enforced by `entrypoint.sh` using `env -u SECURITY_ENGINEER_BWS_TOKEN` before launching the agent process.
 
-**The discipline requirement:** nothing enforces this separation automatically. A developer who puts their personal token in `.env.local` collapses the isolation silently. AVP still enforces authorization at the policy layer, but the credential separation is gone. This is a policy and code review control, not a technical one.
-
-`.env` and `.env.local` must be in `.gitignore`. A committed machine token is a secret in version history with no automatic expiry.
+**The honest residual:** this separation is a code discipline control, not a technical guarantee. A developer who removes the `env -u` line in `entrypoint.sh` collapses the isolation silently. AVP still enforces authorization at the policy layer — the Cedar ceiling still holds — but the credential scoping is gone. This is a code review requirement, not an enforcement mechanism.
 
 ---
 
@@ -372,25 +393,23 @@ An agent process running at project scope sees `.env.local`. It does not inherit
 
 ```
 avp-agent-identity/
-├── chatbot/
-│   ├── app.py          Chainlit + Claude tool use, AVP on every access
-│   ├── secrets.py      BWS SDK loader
-│   ├── Dockerfile
-│   └── requirements.txt
-├── developer/
-│   ├── main.py         FastAPI, standard and elevated developer access
-│   ├── secrets.py      BWS SDK loader
-│   ├── Dockerfile
-│   └── requirements.txt
+├── workspace/
+│   ├── Dockerfile            Single container image for both processes
+│   ├── entrypoint.sh         Launches both processes with per-process credential scoping
+│   ├── bws_secrets.py        BWS SDK loader (shared by both processes)
+│   ├── requirements.txt      All Python dependencies
+│   ├── kb_agent/
+│   │   ├── app.py            Chainlit KB agent — AVP on every data access
+│   │   └── debug.py          Debug API — exposes /debug/env-scope on port 8002
+│   └── engineer/
+│       └── main.py           FastAPI engineer portal — standard and elevated access
 ├── postgres/
 │   └── init/
-│       ├── orders.sql
-│       ├── payments.sql    ← the data the agent cannot reach
-│       └── system_logs.sql
+│       └── incidents.sql     Schema + seed data (5 realistic incidents)
 ├── terraform/
-│   ├── main.tf         AVP policy store + all Cedar policies + ceiling forbid
+│   ├── main.tf               AVP policy store, Cedar policies, ceiling forbid, IAM
 │   └── variables.tf
-├── docker-compose.yml
+├── docker-compose.yml        workspace + db-incidents
 ├── .env.example
 └── .gitignore
 ```
@@ -400,7 +419,7 @@ avp-agent-identity/
 ## Teardown
 
 ```bash
-bws run --project-id <avp-agent-identity-project-uuid> -- 'docker compose down -v'
+docker compose down -v
 cd terraform && terraform destroy
 ```
 
