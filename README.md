@@ -42,44 +42,50 @@ The KB agent queries the same `incidents` table the engineer uses. AVP evaluates
 ┌─────────────────────────────────────────────────────────────────────┐
 │  workspace container — simulates a shared developer workstation      │
 │                                                                       │
-│  ┌─────────────────────────┐   ┌─────────────────────────────────┐  │
-│  │  KB Agent               │   │  Security Engineer Portal       │  │
-│  │  Chainlit  port 8000    │   │  FastAPI   port 8001            │  │
-│  │  Debug API port 8002    │   │                                 │  │
-│  │                         │   │                                 │  │
-│  │  Principal: kb-agent    │   │  Principal: security-engineer   │  │
-│  │  BWS token: KB_BWS_TOKEN│   │  BWS token: SECURITY_ENGINEER   │  │
-│  │  (engineer token        │   │            _BWS_TOKEN           │  │
-│  │   stripped at launch)   │   │  (inherited from container env) │  │
-│  └───────────┬─────────────┘   └──────────────┬──────────────────┘  │
-│              │                                 │                      │
-│              └─────────────────┬───────────────┘                      │
-│                                │ IsAuthorized() before every access   │
-│                                ▼                                      │
-│                      ┌──────────────────┐                            │
-│                      │  AVP  (AWS)      │ ← Cedar policies           │
-│                      │  IsAuthorized    │                            │
-│                      └────────┬─────────┘                            │
-│                               │ ALLOW / DENY + CloudWatch log        │
-│                               ▼                                      │
-│                      ┌──────────────────┐                            │
-│                      │  incidents       │                            │
-│                      │  Postgres        │                            │
-│                      │                  │                            │
-│                      │  public fields:  │                            │
-│                      │  id, title,      │                            │
-│                      │  severity,       │                            │
-│                      │  status,         │                            │
-│                      │  created_at      │                            │
-│                      │                  │                            │
-│                      │  sensitive:      │                            │
-│                      │  affected_       │                            │
-│                      │  customers,      │                            │
-│                      │  internal_notes, │                            │
-│                      │  remediation_    │                            │
-│                      │  details,        │                            │
-│                      │  postmortem_url  │                            │
-│                      └──────────────────┘                            │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  same OS  ·  same filesystem  ·  same network               │    │
+│  │                                                               │    │
+│  │  ┌───────────────────────┐   ┌───────────────────────────┐  │    │
+│  │  │  KB Agent             │   │  Security Engineer Portal  │  │    │
+│  │  │  Chainlit  port 8000  │   │  FastAPI   port 8001       │  │    │
+│  │  │  Debug API port 8002  │   │                            │  │    │
+│  │  │                       │   │                            │  │    │
+│  │  │  Principal: kb-agent  │   │  Principal:                │  │    │
+│  │  │  BWS token: KB_BWS_   │   │    security-engineer       │  │    │
+│  │  │    TOKEN              │   │  BWS token: SECURITY_      │  │    │
+│  │  │  (engineer token      │   │    ENGINEER_BWS_TOKEN      │  │    │
+│  │  │   stripped at launch) │   │  (full container env)      │  │    │
+│  │  └──────────┬────────────┘   └─────────────┬──────────────┘  │    │
+│  │             │                               │                  │    │
+│  └─────────────┼───────────────────────────────┼──────────────────┘    │
+│                │                               │                        │
+│                └───────────────┬───────────────┘                        │
+│                                │ IsAuthorized() before every access     │
+│                                ▼                                        │
+│                      ┌──────────────────┐                              │
+│                      │  AVP  (AWS)      │ ← Cedar policies             │
+│                      │  IsAuthorized    │                              │
+│                      └────────┬─────────┘                              │
+│                               │ ALLOW / DENY + CloudWatch log          │
+│                               ▼                                        │
+│                      ┌──────────────────┐                              │
+│                      │  incidents       │                              │
+│                      │  Postgres        │                              │
+│                      │                  │                              │
+│                      │  public fields:  │                              │
+│                      │  id, title,      │                              │
+│                      │  severity,       │                              │
+│                      │  status,         │                              │
+│                      │  created_at      │                              │
+│                      │                  │                              │
+│                      │  sensitive:      │                              │
+│                      │  affected_       │                              │
+│                      │  customers,      │                              │
+│                      │  internal_notes, │                              │
+│                      │  remediation_    │                              │
+│                      │  details,        │                              │
+│                      │  postmortem_url  │                              │
+│                      └──────────────────┘                              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
