@@ -138,7 +138,7 @@ Outputs:
 
 ### 2. Create BWS machine accounts
 
-In the [Bitwarden Secrets Manager console](https://vault.bitwarden.com):
+In the [Bitwarden Secrets Manager console](https://sm.bitwarden.com):
 
 **Create a project** named `avp-agent-identity`.
 
