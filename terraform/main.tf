@@ -20,7 +20,14 @@ resource "aws_verifiedpermissions_policy_store" "main" {
   }
 }
 
+# ---------------------------------------------------------------------------
 # Cedar schema
+#
+# Two principals: Agent (kb-agent) and User (security-engineer)
+# Two resources: incidents (public fields) and incidents_sensitive (full record)
+# The application applies the column filter based on the AVP decision.
+# ---------------------------------------------------------------------------
+
 resource "aws_verifiedpermissions_schema" "main" {
   policy_store_id = aws_verifiedpermissions_policy_store.main.id
 
@@ -38,9 +45,7 @@ resource "aws_verifiedpermissions_schema" "main" {
             "User": {
               "shape": {
                 "type": "Record",
-                "attributes": {
-                  "role": { "type": "String", "required": true }
-                }
+                "attributes": {}
               }
             },
             "DataStore": {
@@ -58,21 +63,7 @@ resource "aws_verifiedpermissions_schema" "main" {
                 "context": {
                   "type": "Record",
                   "attributes": {
-                    "elevation_active":    { "type": "Boolean", "required": true },
-                    "session_customer_id": { "type": "String",  "required": false }
-                  }
-                }
-              }
-            },
-            "write": {
-              "appliesTo": {
-                "principalTypes": ["Agent", "User"],
-                "resourceTypes": ["DataStore"],
-                "context": {
-                  "type": "Record",
-                  "attributes": {
-                    "elevation_active":    { "type": "Boolean", "required": true },
-                    "session_customer_id": { "type": "String",  "required": false }
+                    "elevation_active": { "type": "Boolean", "required": true }
                   }
                 }
               }
@@ -85,65 +76,44 @@ resource "aws_verifiedpermissions_schema" "main" {
 }
 
 # ---------------------------------------------------------------------------
-# Chatbot agent policies
+# KB agent policies
 #
-# The agent can read orders only when a valid customer session is present.
-# context.session_customer_id is passed by the app server — not the client.
-# The app then filters the SQL query to WHERE customer_id = session_customer_id.
-# The Cedar policy validates the agent is operating within a customer session.
+# The KB agent can read public incident fields (resource: incidents).
+# It is explicitly forbidden from sensitive fields (resource: incidents_sensitive).
+# The ceiling forbid at the bottom of this file enforces this regardless of
+# any permit policy a developer might try to add.
 # ---------------------------------------------------------------------------
 
-resource "aws_verifiedpermissions_policy" "chatbot_orders_read" {
+resource "aws_verifiedpermissions_policy" "kb_agent_incidents_read" {
   policy_store_id = aws_verifiedpermissions_policy_store.main.id
   depends_on      = [aws_verifiedpermissions_schema.main]
 
   definition {
     static {
-      description = "Chatbot agent: read orders within an authenticated customer session"
+      description = "KB agent: read public incident fields (title, severity, status, created_at)"
       statement   = <<-CEDAR
         permit(
-          principal == AgentIdentity::Agent::"chatbot-support",
+          principal == AgentIdentity::Agent::"kb-agent",
           action == AgentIdentity::Action::"read",
-          resource == AgentIdentity::DataStore::"orders"
-        )
-        when { context has session_customer_id };
-      CEDAR
-    }
-  }
-}
-
-# Explicit deny: chatbot cannot access payments under any circumstance
-resource "aws_verifiedpermissions_policy" "chatbot_payments_deny" {
-  policy_store_id = aws_verifiedpermissions_policy_store.main.id
-  depends_on      = [aws_verifiedpermissions_schema.main]
-
-  definition {
-    static {
-      description = "Chatbot agent: explicitly forbidden from payment records"
-      statement   = <<-CEDAR
-        forbid(
-          principal == AgentIdentity::Agent::"chatbot-support",
-          action in [AgentIdentity::Action::"read", AgentIdentity::Action::"write"],
-          resource == AgentIdentity::DataStore::"payments"
+          resource == AgentIdentity::DataStore::"incidents"
         );
       CEDAR
     }
   }
 }
 
-# Explicit deny: chatbot cannot access system logs
-resource "aws_verifiedpermissions_policy" "chatbot_logs_deny" {
+resource "aws_verifiedpermissions_policy" "kb_agent_incidents_sensitive_deny" {
   policy_store_id = aws_verifiedpermissions_policy_store.main.id
   depends_on      = [aws_verifiedpermissions_schema.main]
 
   definition {
     static {
-      description = "Chatbot agent: explicitly forbidden from system logs"
+      description = "KB agent: explicitly forbidden from sensitive incident fields"
       statement   = <<-CEDAR
         forbid(
-          principal == AgentIdentity::Agent::"chatbot-support",
-          action in [AgentIdentity::Action::"read", AgentIdentity::Action::"write"],
-          resource == AgentIdentity::DataStore::"system_logs"
+          principal == AgentIdentity::Agent::"kb-agent",
+          action == AgentIdentity::Action::"read",
+          resource == AgentIdentity::DataStore::"incidents_sensitive"
         );
       CEDAR
     }
@@ -153,26 +123,26 @@ resource "aws_verifiedpermissions_policy" "chatbot_logs_deny" {
 # ---------------------------------------------------------------------------
 # Permission ceiling
 #
-# No agent principal — regardless of how a developer configures it —
-# can ever access payment records. A permit policy for an agent on payments
+# No agent principal — regardless of how it is configured — can ever access
+# incidents_sensitive. A permit policy added for any agent on incidents_sensitive
 # will always be overridden by this forbid.
 #
-# This is the control plane claim: SecOps defines the ceiling,
-# developers cannot exceed it.
+# This is the control plane claim: the security team defines the ceiling.
+# Developers cannot grant any agent access above it.
 # ---------------------------------------------------------------------------
 
-resource "aws_verifiedpermissions_policy" "agent_ceiling_payments" {
+resource "aws_verifiedpermissions_policy" "agent_ceiling_sensitive" {
   policy_store_id = aws_verifiedpermissions_policy_store.main.id
   depends_on      = [aws_verifiedpermissions_schema.main]
 
   definition {
     static {
-      description = "Ceiling policy: no agent identity may access payment records regardless of configuration"
+      description = "Ceiling: no agent identity may access sensitive incident fields regardless of configuration"
       statement   = <<-CEDAR
         forbid(
           principal is AgentIdentity::Agent,
-          action in [AgentIdentity::Action::"read", AgentIdentity::Action::"write"],
-          resource == AgentIdentity::DataStore::"payments"
+          action == AgentIdentity::Action::"read",
+          resource == AgentIdentity::DataStore::"incidents_sensitive"
         );
       CEDAR
     }
@@ -180,83 +150,43 @@ resource "aws_verifiedpermissions_policy" "agent_ceiling_payments" {
 }
 
 # ---------------------------------------------------------------------------
-# Developer (standard) policies
-# Read access to orders and system logs. No access to payments.
+# Security engineer policies
+#
+# Standard: read public incident fields.
+# Elevated (JIT): read sensitive fields. Elevation is a context attribute
+# passed by the app server — the client cannot set it.
 # ---------------------------------------------------------------------------
 
-resource "aws_verifiedpermissions_policy" "developer_orders_read" {
+resource "aws_verifiedpermissions_policy" "engineer_incidents_read" {
   policy_store_id = aws_verifiedpermissions_policy_store.main.id
   depends_on      = [aws_verifiedpermissions_schema.main]
 
   definition {
     static {
-      description = "Developer (standard): read all orders"
+      description = "Security engineer (standard): read public incident fields"
       statement   = <<-CEDAR
         permit(
-          principal == AgentIdentity::User::"developer",
+          principal == AgentIdentity::User::"security-engineer",
           action == AgentIdentity::Action::"read",
-          resource == AgentIdentity::DataStore::"orders"
+          resource == AgentIdentity::DataStore::"incidents"
         );
       CEDAR
     }
   }
 }
 
-resource "aws_verifiedpermissions_policy" "developer_logs_read" {
+resource "aws_verifiedpermissions_policy" "engineer_incidents_sensitive_elevated" {
   policy_store_id = aws_verifiedpermissions_policy_store.main.id
   depends_on      = [aws_verifiedpermissions_schema.main]
 
   definition {
     static {
-      description = "Developer (standard): read system logs"
+      description = "Security engineer (elevated): read full incident record including sensitive fields — JIT only"
       statement   = <<-CEDAR
         permit(
-          principal == AgentIdentity::User::"developer",
+          principal == AgentIdentity::User::"security-engineer",
           action == AgentIdentity::Action::"read",
-          resource == AgentIdentity::DataStore::"system_logs"
-        );
-      CEDAR
-    }
-  }
-}
-
-# ---------------------------------------------------------------------------
-# Developer (elevated) policies
-# JIT access to payments and write access to orders.
-# Elevation is a context attribute passed by the app server.
-# ---------------------------------------------------------------------------
-
-resource "aws_verifiedpermissions_policy" "developer_orders_write_elevated" {
-  policy_store_id = aws_verifiedpermissions_policy_store.main.id
-  depends_on      = [aws_verifiedpermissions_schema.main]
-
-  definition {
-    static {
-      description = "Developer (elevated): read and write all orders"
-      statement   = <<-CEDAR
-        permit(
-          principal == AgentIdentity::User::"developer",
-          action in [AgentIdentity::Action::"read", AgentIdentity::Action::"write"],
-          resource == AgentIdentity::DataStore::"orders"
-        )
-        when { context.elevation_active == true };
-      CEDAR
-    }
-  }
-}
-
-resource "aws_verifiedpermissions_policy" "developer_payments_elevated" {
-  policy_store_id = aws_verifiedpermissions_policy_store.main.id
-  depends_on      = [aws_verifiedpermissions_schema.main]
-
-  definition {
-    static {
-      description = "Developer (elevated): read payment records — JIT only"
-      statement   = <<-CEDAR
-        permit(
-          principal == AgentIdentity::User::"developer",
-          action == AgentIdentity::Action::"read",
-          resource == AgentIdentity::DataStore::"payments"
+          resource == AgentIdentity::DataStore::"incidents_sensitive"
         )
         when { context.elevation_active == true };
       CEDAR
@@ -267,8 +197,7 @@ resource "aws_verifiedpermissions_policy" "developer_payments_elevated" {
 # ---------------------------------------------------------------------------
 # IAM user for AVP authorization calls
 #
-# Least-privilege: only verifiedpermissions:IsAuthorized on the policy store
-# created above. No other AWS access is granted.
+# Least-privilege: only verifiedpermissions:IsAuthorized on this policy store.
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_user" "avp_agent" {

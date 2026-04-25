@@ -1,13 +1,23 @@
 services:
 
-  # Customer-facing chatbot (Chainlit + Claude API)
-  chatbot:
-    build: ./chatbot
+  # Simulated developer workstation — both the KB agent and the security
+  # engineer portal run as sibling processes inside this single container.
+  # Same OS, same filesystem, different credential scope per process.
+  # See workspace/entrypoint.sh for how credential isolation is implemented.
+  workspace:
+    build: ./workspace
     ports:
-      - "8000:8000"
+      - "8000:8000"   # KB agent (Chainlit UI)
+      - "8001:8001"   # Security engineer portal (FastAPI)
+      - "8002:8002"   # KB agent debug (env scope check)
     environment:
-      # Machine account token: scoped identity for this service only
-      - BWS_ACCESS_TOKEN=${CHATBOT_BWS_TOKEN}
+      # Machine account tokens — one per principal identity.
+      # KB_BWS_TOKEN: scoped to kb-agent machine account in BWS.
+      # SECURITY_ENGINEER_BWS_TOKEN: scoped to security-engineer machine account.
+      # entrypoint.sh sets BWS_ACCESS_TOKEN per process and strips the engineer
+      # token from the KB agent environment.
+      - KB_BWS_TOKEN=${KB_BWS_TOKEN}
+      - SECURITY_ENGINEER_BWS_TOKEN=${SECURITY_ENGINEER_BWS_TOKEN}
       - BWS_ORGANIZATION_ID=${BWS_ORGANIZATION_ID}
       # Structural config
       - AVP_POLICY_STORE_ID=${AVP_POLICY_STORE_ID}
@@ -16,66 +26,18 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
     depends_on:
-      - db-orders
-    networks:
-      - app-net
+      - db-incidents
 
-  # Developer portal — demonstrates standard and elevated developer access
-  developer:
-    build: ./developer
-    ports:
-      - "8001:8001"
-    environment:
-      - BWS_ACCESS_TOKEN=${DEVELOPER_BWS_TOKEN}
-      - BWS_ORGANIZATION_ID=${BWS_ORGANIZATION_ID}
-      - AVP_POLICY_STORE_ID=${AVP_POLICY_STORE_ID}
-      - AWS_REGION=${AWS_REGION}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-    depends_on:
-      - db-orders
-      - db-payments
-      - db-logs
-    networks:
-      - app-net
-
-  # Orders — chatbot (own customer only) and developer (all) can read
-  # POSTGRES_PASSWORD is injected by `bws run` at startup. Not in .env.
-  db-orders:
+  # Single incidents database — same table, two access levels via AVP
+  db-incidents:
     image: postgres:16
     environment:
-      POSTGRES_DB: orders
+      POSTGRES_DB: incidents
       POSTGRES_USER: app
-      POSTGRES_PASSWORD: ${DB_ORDERS_PASSWORD}
+      POSTGRES_PASSWORD: ${DB_INCIDENTS_PASSWORD}
     volumes:
-      - ./postgres/init/orders.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - app-net
-
-  # Payments — developer elevated only; chatbot has no access (AVP ceiling)
-  db-payments:
-    image: postgres:16
-    environment:
-      POSTGRES_DB: payments
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: ${DB_PAYMENTS_PASSWORD}
-    volumes:
-      - ./postgres/init/payments.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - app-net
-
-  # System logs — developer standard and elevated; chatbot has no access
-  db-logs:
-    image: postgres:16
-    environment:
-      POSTGRES_DB: system_logs
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: ${DB_LOGS_PASSWORD}
-    volumes:
-      - ./postgres/init/system_logs.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - app-net
+      - ./postgres/init/incidents.sql:/docker-entrypoint-initdb.d/init.sql
 
 networks:
-  app-net:
+  default:
     driver: bridge
